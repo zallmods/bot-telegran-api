@@ -1,6 +1,8 @@
 const { Telegraf } = require('telegraf');
 const fs = require('fs');
 const axios = require('axios');
+const express = require('express');
+const http = require('http');
 
 // Load configuration
 const loadConfig = () => {
@@ -312,14 +314,72 @@ const createMethodsIfNotExists = () => {
 };
 
 // Main function
+const setupExpressServer = () => {
+  const app = express();
+  const PORT = process.env.PORT || 8080;
+  
+  // Simple route to show the bot is online
+  app.get('/', (req, res) => {
+    res.send(`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>Telegram Bot</title>
+          <style>
+            body {
+              font-family: Arial, sans-serif;
+              display: flex;
+              justify-content: center;
+              align-items: center;
+              height: 100vh;
+              margin: 0;
+              background-color: #f5f5f5;
+            }
+            .container {
+              text-align: center;
+              padding: 20px;
+              background-color: white;
+              border-radius: 10px;
+              box-shadow: 0 0 10px rgba(0,0,0,0.1);
+            }
+            .status {
+              color: #4CAF50;
+              font-weight: bold;
+            }
+            .time {
+              color: #555;
+              margin-top: 10px;
+            }
+          </style>
+        </head>
+        <body>
+          <div class="container">
+            <h1>Telegram Bot Server</h1>
+            <p class="status">✅ Bot is running</p>
+            <p class="time">Server time: ${new Date().toLocaleString()}</p>
+          </div>
+        </body>
+      </html>
+    `);
+  });
+  
+  // Start the server
+  app.listen(PORT, () => {
+    console.log(`Express server running on port ${PORT}`);
+  });
+};
+
 const main = async () => {
   createConfigIfNotExists();
   createMethodsIfNotExists();
   
-  const bot = initBot();
+  // Set up express server
+  setupExpressServer();
   
+  // Start telegram bot
+  const bot = initBot();
   bot.launch();
-  console.log('Bot started successfully!');
+  console.log('Telegram bot started successfully!');
   
   // Enable graceful stop
   process.once('SIGINT', () => bot.stop('SIGINT'));
