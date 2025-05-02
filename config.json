@@ -1,15 +1,14 @@
 {
-  "botToken": "7177796181:AAG6SwfRa7ajhCsIPITPbmYHydU3VuqHkbg",
-  "apiUrl": "https://apikey-production.up.railway.app/api/attack",
-  "defaultCooldown": 60,
-  "adminId": "6456655262",
   "users": {
     "6456655262": {
-      "expired": "2025-12-31",
-      "maxtime": 300,
-      "concurrent": 2,
-      "cooldown": 30,
-      "token": "isalmods"
+      "token": "isalmods",
+      "maxTime": 300,
+      "concurrentLimit": 10,
+      "expiryDate": "2030-12-31"
     }
-  }
+  },
+  "adminId": 6456655262,
+  "notificationGroupId": -4764306375,
+  "apiUrl": "https://apikey-production.up.railway.app/api/attack",
+  "apiToken": "isalmods"
 }
