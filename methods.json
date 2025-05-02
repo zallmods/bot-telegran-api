@@ -1,22 +1,7 @@
 [
-  {
-    "name": "UDP",
-    "description": "🇮🇩 Menghasilkan serangan lalu lintas mentah berkecepatan tinggi melalui protokol UDP, membanjiri target dengan paket tanpa koneksi yang nyaris mustahil difilter — sempurna untuk melumpuhkan sistem tanpa perlindungan yang kuat.\n🇺🇸 Generates high-speed raw traffic attacks using the UDP protocol, overwhelming the target with connectionless packets that are nearly impossible to filter — ideal for crippling systems without strong protection."
-  },
-  {
-    "name": "SPIKE",
-    "description": "🇮🇩 Metode banjir TCP yang brutal dan presisi tinggi, dirancang untuk menghabisi sumber daya koneksi dengan cepat dan memicu timeout massal pada sisi server. Cocok untuk pengujian beban ekstrem.\n🇺🇸 A brutal and high-precision TCP flood method designed to quickly exhaust connection resources and trigger mass timeouts on the server side. Ideal for extreme stress testing."
-  },
-  {
-    "name": "HTTP",
-    "description": "🇮🇩 Simulasi permintaan HTTP tingkat aplikasi dengan volume tinggi, menyerupai lalu lintas pengguna nyata namun secara agresif menarget endpoint untuk menguji ketahanan server web hingga batas maksimalnya.\n🇺🇸 Simulates high-volume application-level HTTP requests, mimicking real user traffic while aggressively targeting endpoints to test a web server’s resilience to its absolute limit."
-  },
-  {
-    "name": "CF",
-    "description": "🇮🇩 Mengakali perlindungan Cloudflare dengan algoritma kompleks dan emulasi perilaku pengguna, memungkinkan penetrasi lalu lintas hingga ke lapisan dalam — solusi ideal untuk stress-test situs di balik WAF canggih.\n🇺🇸 Bypasses Cloudflare protections using complex algorithms and user behavior emulation, enabling deep-layer traffic penetration — the ideal solution for stress-testing sites behind advanced WAF systems."
-  },
-  {
-    "name": "BROWSER",
-    "description": "🇮🇩 Teknik canggih yang mensimulasikan aktivitas browser sungguhan, lengkap dengan rotasi user-agent, cookie, dan pengelolaan sesi — sempurna untuk meniru lalu lintas manusia secara masif demi pengujian skala besar.\n🇺🇸 An advanced technique simulating real browser activity, complete with user-agent rotation, cookie handling, and session management — perfect for large-scale testing by mimicking human-like traffic."
-  }
+  { "name": "UDP", "description": "UDP flood method" },
+  { "name": "SPIKE", "description": "TCP flood method" },
+  { "name": "HTTP", "description": "HTTP flood method" },
+  { "name": "CF", "description": "CF flood method" },
+  { "name": "BROWSER", "description": "Browser flood method" }
 ]
