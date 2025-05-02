@@ -3,12 +3,20 @@
     "6456655262": {
       "token": "isalmods",
       "maxTime": 300,
-      "concurrentLimit": 10,
+      "concurrentLimit": 2,
       "expiryDate": "2030-12-31"
     }
   },
   "adminId": 6456655262,
   "notificationGroupId": -4764306375,
-  "apiUrl": "https://apikey-production.up.railway.app/api/attack",
-  "apiToken": "isalmods"
+  "apis": [
+    {
+      "url": "http://95.216.12.48:21743/api/attack",
+      "token": "isalmods"
+    },
+    {
+      "url": "https://apikey-production.up.railway.app/api/attack",
+      "token": "isalmods"
+    }
+  ]
 }
