@@ -1,0 +1,16 @@
+{
+  "name": "telegram-api-bot",
+  "version": "1.0.0",
+  "description": "Telegram bot with user management and API integration",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.2",
+    "telegraf": "^4.15.0"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}
